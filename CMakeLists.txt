@@ -7,6 +7,7 @@ project(
 )
 
 option(SANITIZER "Enable sanitizer build" OFF)
+option(ENABLE_COVERAGE "Enable coverage reporting" OFF)
 
 if (SANITIZER)
     message(STATUS "Building with sanitizer: ${SANITIZER}")
@@ -23,6 +24,13 @@ if (SANITIZER)
     else()
         message(FATAL_ERROR "Unknown sanitizer: ${SANITIZER}")
     endif()
+endif()
+
+if (ENABLE_COVERAGE)
+    message(STATUS "Building with coverage enabled")
+
+    add_compile_options(--coverage -O0 -g)
+    add_link_options(--coverage)
 endif()
 
 set(CMAKE_CXX_STANDARD 23)
