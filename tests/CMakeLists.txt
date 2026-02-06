@@ -4,6 +4,12 @@ add_executable(hello_world_tests
 
 target_link_libraries(hello_world_tests
         PRIVATE GTest::gtest_main
+        PRIVATE hello_world_lib
+)
+
+# Ensure test target sees library headers
+target_include_directories(hello_world_tests
+        PRIVATE src
 )
 
 include(GoogleTest)
