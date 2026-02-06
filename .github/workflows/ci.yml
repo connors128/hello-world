@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build_release:
+    name: Build (Release, GCC)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: >
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_C_COMPILER=gcc
+          -DCMAKE_CXX_COMPILER=g++
+
+      - name: Build
+        run: cmake --build build --config Release
+
+  test_release:
+    name: Test (Release)
+    runs-on: ubuntu-latest
+    needs: build_release
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: >
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_C_COMPILER=gcc
+          -DCMAKE_CXX_COMPILER=g++
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  build_sanitizers:
+    name: Build (${{ matrix.sanitizer }})
+    runs-on: ubuntu-latest
+    needs: test_release
+
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [asan, ubsan, tsan]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure (${{ matrix.sanitizer }})
+        run: >
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_C_COMPILER=clang
+          -DCMAKE_CXX_COMPILER=clang++
+          -DSANITIZER=${{ matrix.sanitizer }}
+
+      - name: Build (${{ matrix.sanitizer }})
+        run: cmake --build build
+
+  test_sanitizers:
+    name: Test (${{ matrix.sanitizer }})
+    runs-on: ubuntu-latest
+    needs: build_sanitizers
+
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [asan, ubsan, tsan]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure (${{ matrix.sanitizer }})
+        run: >
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_C_COMPILER=clang
+          -DCMAKE_CXX_COMPILER=clang++
+          -DSANITIZER=${{ matrix.sanitizer }}
+
+      - name: Build (${{ matrix.sanitizer }})
+        run: cmake --build build
+
+      - name: Test (${{ matrix.sanitizer }})
+        run: ctest --test-dir build --output-on-failure
