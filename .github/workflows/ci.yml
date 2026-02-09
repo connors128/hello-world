@@ -1,0 +1,204 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  release:
+    name: Build & Test (Release, GCC)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Configure
+        run: >
+          cmake -S . -B build_release
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_C_COMPILER=gcc
+          -DCMAKE_CXX_COMPILER=g++
+
+      - name: Build
+        run: cmake --build build_release --config Release
+
+      - name: Test
+        run: ctest --test-dir build_release --output-on-failure
+
+
+  coverage:
+    name: Coverage (gcov)
+    runs-on: ubuntu-latest
+    needs: release
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install coverage tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y gcc-11 g++-11 gcovr
+
+      - name: Configure (coverage)
+        run: >
+          cmake -S . -B build_coverage
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_C_COMPILER=gcc-11
+          -DCMAKE_CXX_COMPILER=g++-11
+          -DENABLE_COVERAGE=ON
+
+      - name: Build
+        run: cmake --build build_coverage
+
+      - name: Test
+        run: ctest --test-dir build_coverage --output-on-failure
+
+      - name: Generate coverage report
+        run: |
+          gcovr \
+            --gcov-executable gcov-11 \
+            --root . \
+            --filter src \
+            --sonarqube coverage.xml \
+            build_coverage
+
+      - name: Upload coverage artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: coverage-artifacts
+          path: |
+            coverage.xml
+            build_coverage/compile_commands.json
+
+  sanitizers:
+    name: Sanitizers (${{ matrix.sanitizer }})
+    runs-on: ubuntu-latest
+    needs: release
+
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [asan, ubsan, tsan]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Configure
+        run: >
+          cmake -S . -B build_${{ matrix.sanitizer }}
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_C_COMPILER=clang
+          -DCMAKE_CXX_COMPILER=clang++
+          -DSANITIZER=${{ matrix.sanitizer }}
+
+      - name: Build
+        run: cmake --build build_${{ matrix.sanitizer }}
+
+      - name: Test
+        run: ctest --test-dir build_${{ matrix.sanitizer }} --output-on-failure
+
+  sonarcloud:
+    name: SonarCloud Analysis
+    runs-on: ubuntu-latest
+    needs: coverage
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install SonarScanner & deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y gcc-11 g++-11
+          curl -sSLo sonar-scanner.zip https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-5.0.1.3006-linux.zip
+          unzip -q sonar-scanner.zip
+          echo "$PWD/sonar-scanner-5.0.1.3006-linux/bin" >> $GITHUB_PATH
+
+      - name: Download coverage artifacts
+        uses: actions/download-artifact@v6
+        with:
+          name: coverage-artifacts
+
+      - name: Verify SonarScanner
+        run: sonar-scanner --version
+
+      - name: Run SonarCloud analysis
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          sonar-scanner \
+            -Dsonar.host.url=https://sonarcloud.io \
+            -Dsonar.projectKey=connors128_hello-world \
+            -Dsonar.organization=connors128 \
+            -Dsonar.cfamily.compile-commands=build_coverage/compile_commands.json \
+            -Dsonar.coverageReportPaths=coverage.xml \
+            -Dsonar.tests=tests \
+            -Dsonar.sources=src
+
+  clang_format:
+    name: clang-format
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install clang-format
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y clang-format
+
+      - name: Check C++ formatting
+        run: |
+          clang-format --version
+          FILES=$(find src tests -name '*.cpp' -o -name '*.hpp' -o -name '*.h')
+          clang-format --dry-run --Werror $FILES
+
+  cmake_format:
+    name: cmake-format
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install cmake-format
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y python3-pip
+          pip3 install cmakelang
+
+      - name: Check CMake formatting
+        run: |
+          FILES=$(find . -name 'CMakeLists.txt' -o -name '*.cmake')
+          cmake-format --check $FILES || (
+            echo "::error::CMake formatting issues detected"
+            cmake-format $FILES
+            exit 1
+          )
+
+  clang_tidy:
+    name: clang-tidy
+    runs-on: ubuntu-latest
+    needs: coverage
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install clang-tidy
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y clang-tidy clang
+
+      - name: Download compile commands
+        uses: actions/download-artifact@v6
+        with:
+          name: coverage-artifacts
+
+      - name: Run clang-tidy
+        continue-on-error: true
+        run: |
+          clang-tidy --version
+          FILES=$(find src -name '*.cpp')
+          clang-tidy \
+            -p build_coverage \
+            $FILES
